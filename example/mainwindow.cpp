@@ -14,7 +14,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
     AiProvider *ai = new AiProvider(this);
     ai->setServiceType(AiProvider::DeepSeek);
-    ai->setApiKey("123");  // 替换成你的 Key
+    ai->setApiKey("sk-e4687dadfe514522b31bea73f698a103");  // 替换成你的 Key
 
     // UI 组件
     QWidget *central = new QWidget(this);
@@ -42,6 +42,19 @@ MainWindow::MainWindow(QWidget *parent)
     modelLayout->addWidget(modelSelector, 1);
     modelLayout->addWidget(fetchModelsBtn);
 
+
+    // === 系统提示词 ===
+    QHBoxLayout *systemPromptLayout = new QHBoxLayout;
+    QLabel *systemPromptLabel = new QLabel("系统提示词：");
+    QLineEdit *systemPromptInput = new QLineEdit;
+    systemPromptInput->setPlaceholderText("例如：你是一位幽默风趣的聊天助手");
+    systemPromptLayout->addWidget(systemPromptLabel);
+    systemPromptLayout->addWidget(systemPromptInput, 1);
+    layout->addLayout(systemPromptLayout);
+
+
+
+
     // === 聊天区域 ===
     QTextEdit *chatDisplay = new QTextEdit;
     chatDisplay->setReadOnly(true);
@@ -54,6 +67,11 @@ MainWindow::MainWindow(QWidget *parent)
     inputLayout->addWidget(input);
     inputLayout->addWidget(sendBtn);
 
+    // 绑定系统提示词设置
+    connect(systemPromptInput, &QLineEdit::textChanged, [=](const QString &text){
+        ai->setSystemPrompt(text);
+        chatDisplay->append(QString("⚙️ 系统提示词已更新：%1").arg(text));
+    });
     // === 添加到主布局 ===
     layout->addLayout(serviceLayout);
     layout->addLayout(modelLayout);

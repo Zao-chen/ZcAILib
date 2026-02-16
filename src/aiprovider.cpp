@@ -187,17 +187,27 @@ void AiProvider::chat(const QString &message)
 
     QNetworkRequest request(m_apiUrl);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-
     request.setRawHeader("Authorization", ("Bearer " + m_apiKey).toUtf8());
 
     QJsonObject json;
     json["model"] = m_model;
 
     QJsonArray messages;
-    QJsonObject msg;
-    msg["role"] = "user";
-    msg["content"] = message;
-    messages.append(msg);
+
+    // 如果系统提示词不为空，先添加系统消息
+    if (!m_systemPrompt.isEmpty()) {
+        QJsonObject systemMsg;
+        systemMsg["role"] = "system";
+        systemMsg["content"] = m_systemPrompt;
+        messages.append(systemMsg);
+    }
+
+    // 添加用户消息
+    QJsonObject userMsg;
+    userMsg["role"] = "user";
+    userMsg["content"] = message;
+    messages.append(userMsg);
+
     json["messages"] = messages;
 
     qDebug() << "=== AI Request ===";
@@ -208,6 +218,7 @@ void AiProvider::chat(const QString &message)
     QNetworkReply *reply = m_network->post(request, QJsonDocument(json).toJson());
     connect(reply, &QNetworkReply::finished, this, &AiProvider::handleReply);
 }
+
 
 void AiProvider::handleReply()
 {
@@ -267,4 +278,10 @@ void AiProvider::handleReply()
     }
 
     reply->deleteLater();
+}
+
+
+void AiProvider::setSystemPrompt(const QString &prompt)
+{
+    m_systemPrompt = prompt;
 }
