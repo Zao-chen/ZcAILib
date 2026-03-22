@@ -17,6 +17,11 @@ on:
         required: false
         default: "6.8.3"
         type: string
+      qt_arch:
+        description: Qt architecture, leave empty to auto-select by Qt version
+        required: false
+        default: ""
+        type: string
       prerelease:
         description: Mark release as prerelease
         required: false
@@ -42,13 +47,41 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Resolve Qt architecture
+        id: qt_arch
+        shell: pwsh
+        run: |
+          $qtVersion = "${{ inputs.qt_version }}"
+          $qtArch = "${{ inputs.qt_arch }}"
+
+          if ([string]::IsNullOrWhiteSpace($qtArch)) {
+            $parts = $qtVersion.Split('.')
+            $major = if ($parts.Length -gt 0) { [int]$parts[0] } else { 0 }
+            $minor = if ($parts.Length -gt 1) { [int]$parts[1] } else { 0 }
+
+            if ($major -gt 6 -or ($major -eq 6 -and $minor -ge 8)) {
+              $qtArch = "win64_msvc2022_64"
+            } elseif ($major -eq 6 -or ($major -eq 5 -and $minor -ge 15)) {
+              $qtArch = "win64_msvc2019_64"
+            } elseif ($major -eq 5 -and $minor -ge 9) {
+              $qtArch = "win64_msvc2017_64"
+            } elseif ($major -eq 5 -and $minor -ge 6) {
+              $qtArch = "win64_msvc2015_64"
+            } else {
+              $qtArch = "win64_msvc2013_64"
+            }
+          }
+
+          "qt_arch=$qtArch" >> $env:GITHUB_OUTPUT
+          "Using Qt architecture: $qtArch"
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ inputs.qt_version }}
           host: windows
           target: desktop
-          arch: win64_msvc2022_64
+          arch: ${{ steps.qt_arch.outputs.qt_arch }}
           cache: true
 
       - name: Configure
