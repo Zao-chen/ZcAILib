@@ -1,19 +1,79 @@
 #include "AiProvider.h"
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
+
+#include <QDateTime>
+#include <QDebug>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
-#include <QDebug>
+#include <QJsonParseError>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QUrl>
+
+namespace {
+
+QString buildApiErrorMessage(const QByteArray &data, const QString &fallback)
+{
+    QString errorMsg = fallback;
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        return errorMsg;
+    }
+
+    const QJsonObject root = doc.object();
+    if (!root.contains("error") || !root.value("error").isObject()) {
+        return errorMsg;
+    }
+
+    const QString apiError = root.value("error").toObject().value("message").toString();
+    if (!apiError.isEmpty()) {
+        errorMsg += "\nAPI error: " + apiError;
+    }
+
+    return errorMsg;
+}
+
+QString extractFinalContent(const QJsonObject &root)
+{
+    const QJsonArray choices = root.value("choices").toArray();
+    if (choices.isEmpty()) {
+        return {};
+    }
+
+    const QJsonObject firstChoice = choices.first().toObject();
+    const QJsonObject message = firstChoice.value("message").toObject();
+    if (!message.isEmpty()) {
+        return message.value("content").toString();
+    }
+
+    const QJsonObject delta = firstChoice.value("delta").toObject();
+    return delta.value("content").toString();
+}
+
+QString extractStreamDelta(const QJsonObject &root)
+{
+    const QJsonArray choices = root.value("choices").toArray();
+    if (choices.isEmpty()) {
+        return {};
+    }
+
+    const QJsonObject delta = choices.first().toObject().value("delta").toObject();
+    return delta.value("content").toString();
+}
+
+} // namespace
 
 AiProvider::AiProvider(QObject *parent)
     : QObject(parent)
     , m_network(new QNetworkAccessManager(this))
-    , m_serviceType(OpenAI)
     , m_apiUrl("https://api.openai.com/v1/chat/completions")
-    , m_modelsApiUrl("https://api.openai.com/v1/models")
     , m_model("gpt-3.5-turbo")
+    , m_streamEnabled(false)
+    , m_modelsApiUrl("https://api.openai.com/v1/models")
+    , m_serviceType(OpenAI)
 {
 }
 
@@ -39,7 +99,6 @@ void AiProvider::setServiceType(ServiceType type)
         break;
 
     case Custom:
-        // 自定义需要手动设置
         break;
     }
 }
@@ -59,22 +118,24 @@ void AiProvider::setModel(const QString &model)
     m_model = model;
 }
 
-// ========== 从 API 获取模型列表 ==========
+void AiProvider::setStreamEnabled(bool enabled)
+{
+    m_streamEnabled = enabled;
+}
+
 void AiProvider::fetchModels()
 {
     if (m_apiKey.isEmpty()) {
-        emit errorOccurred("❌ API Key 未设置");
+        emit errorOccurred("API Key is not set");
         return;
     }
 
     if (m_modelsApiUrl.isEmpty()) {
-        emit errorOccurred("❌ 该服务未配置模型列表 API");
+        emit errorOccurred("Models API URL is not configured");
         return;
     }
 
-    QNetworkRequest request(m_modelsApiUrl);
-
-    // 根据服务类型设置请求头
+    QNetworkRequest request{QUrl(m_modelsApiUrl)};
     request.setRawHeader("Authorization", ("Bearer " + m_apiKey).toUtf8());
 
     qDebug() << "=== Fetching Models ===";
@@ -86,85 +147,70 @@ void AiProvider::fetchModels()
 
 void AiProvider::handleModelsReply()
 {
-    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
-    if (!reply) return;
+    QNetworkReply *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply) {
+        return;
+    }
 
-    QByteArray data = reply->readAll();
+    const QByteArray data = reply->readAll();
 
     qDebug() << "=== Models Response ===";
     qDebug() << "Status Code:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     qDebug() << "Data:" << data;
 
-    // 检查网络错误
     if (reply->error() != QNetworkReply::NoError) {
-        QString errorMsg = QString("获取模型列表失败 [%1]: %2")
-                               .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
-                               .arg(reply->errorString());
+        const QString errorMsg = buildApiErrorMessage(
+            data,
+            QString("Fetch models failed [%1]: %2")
+                .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+                .arg(reply->errorString()));
 
-        // 尝试解析错误详情
-        QJsonDocument doc = QJsonDocument::fromJson(data);
-        if (doc.isObject() && doc.object().contains("error")) {
-            QJsonObject errorObj = doc.object()["error"].toObject();
-            QString apiError = errorObj["message"].toString();
-            if (!apiError.isEmpty()) {
-                errorMsg += "\nAPI 错误：" + apiError;
-            }
-        }
-
-        emit errorOccurred("❌ " + errorMsg);
+        emit errorOccurred(errorMsg);
         reply->deleteLater();
         return;
     }
 
-    // 解析 JSON
-    QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (!doc.isObject()) {
-        emit errorOccurred("❌ 无效的 JSON 响应格式");
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        emit errorOccurred("Invalid models response JSON");
         reply->deleteLater();
         return;
     }
 
-    QJsonObject obj = doc.object();
+    const QJsonObject root = doc.object();
+    if (!root.contains("data") || !root.value("data").isArray()) {
+        emit errorOccurred("Models response is missing 'data'");
+        reply->deleteLater();
+        return;
+    }
+
     QList<ModelInfo> models;
+    const QJsonArray items = root.value("data").toArray();
+    for (const QJsonValue &value : items) {
+        const QJsonObject modelObject = value.toObject();
 
-    // 解析模型列表
-    if (obj.contains("data")) {
-        QJsonArray dataArray = obj["data"].toArray();
+        ModelInfo info;
+        info.id = modelObject.value("id").toString();
+        info.ownedBy = modelObject.value("owned_by").toString();
 
-        qDebug() << "Found" << dataArray.size() << "models";
-
-        for (const QJsonValue &value : dataArray) {
-            QJsonObject modelObj = value.toObject();
-
-            ModelInfo info;
-            info.id = modelObj["id"].toString();
-            info.ownedBy = modelObj["owned_by"].toString();
-
-            // 获取创建时间
-            if (modelObj.contains("created")) {
-                qint64 timestamp = modelObj["created"].toInteger();
-                info.created = QDateTime::fromSecsSinceEpoch(timestamp).toString("yyyy-MM-dd");
-            }
-
-            // 获取权限信息（如果有）
-            if (modelObj.contains("permission")) {
-                QJsonArray permArray = modelObj["permission"].toArray();
-                for (const QJsonValue &perm : permArray) {
-                    info.permissions.append(perm.toString());
-                }
-            }
-
-            models.append(info);
-            qDebug() << "  -" << info.id << "(" << info.ownedBy << ")";
+        if (modelObject.contains("created")) {
+            const qint64 timestamp = modelObject.value("created").toInteger();
+            info.created = QDateTime::fromSecsSinceEpoch(timestamp).toString("yyyy-MM-dd");
         }
-    } else {
-        emit errorOccurred("❌ 响应格式错误：缺少 'data' 字段");
-        reply->deleteLater();
-        return;
+
+        if (modelObject.contains("permission") && modelObject.value("permission").isArray()) {
+            const QJsonArray permissions = modelObject.value("permission").toArray();
+            for (const QJsonValue &permission : permissions) {
+                info.permissions.append(permission.toString());
+            }
+        }
+
+        models.append(info);
     }
 
     if (models.isEmpty()) {
-        emit errorOccurred("⚠️ 未获取到任何模型");
+        emit errorOccurred("No models were returned");
     } else {
         emit modelsReceived(models);
     }
@@ -172,29 +218,27 @@ void AiProvider::handleModelsReply()
     reply->deleteLater();
 }
 
-// ========== 聊天功能 ==========
 void AiProvider::chat(const QString &message)
 {
     if (m_apiKey.isEmpty()) {
-        emit errorOccurred("❌ API Key 未设置");
+        emit errorOccurred("API Key is not set");
         return;
     }
 
     if (m_apiUrl.isEmpty()) {
-        emit errorOccurred("❌ API URL 未设置");
+        emit errorOccurred("API URL is not set");
         return;
     }
 
-    QNetworkRequest request(m_apiUrl);
+    QNetworkRequest request{QUrl(m_apiUrl)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", ("Bearer " + m_apiKey).toUtf8());
 
     QJsonObject json;
     json["model"] = m_model;
+    json["stream"] = m_streamEnabled;
 
     QJsonArray messages;
-
-    // 如果系统提示词不为空，先添加系统消息
     if (!m_systemPrompt.isEmpty()) {
         QJsonObject systemMsg;
         systemMsg["role"] = "system";
@@ -202,84 +246,204 @@ void AiProvider::chat(const QString &message)
         messages.append(systemMsg);
     }
 
-    // 添加用户消息
     QJsonObject userMsg;
     userMsg["role"] = "user";
     userMsg["content"] = message;
     messages.append(userMsg);
-
     json["messages"] = messages;
 
     qDebug() << "=== AI Request ===";
     qDebug() << "URL:" << m_apiUrl;
     qDebug() << "Model:" << m_model;
+    qDebug() << "Stream:" << m_streamEnabled;
     qDebug() << "Message:" << message;
 
-    QNetworkReply *reply = m_network->post(request, QJsonDocument(json).toJson());
+    QNetworkReply *reply = m_network->post(request, QJsonDocument(json).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, &AiProvider::handleReply);
+
+    if (m_streamEnabled) {
+        m_streamBuffers.insert(reply, QByteArray());
+        m_rawResponses.insert(reply, QByteArray());
+        m_streamReplies.insert(reply, QString());
+        connect(reply, &QIODevice::readyRead, this, &AiProvider::handleStreamReadyRead);
+    }
 }
 
+void AiProvider::handleStreamReadyRead()
+{
+    QNetworkReply *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply) {
+        return;
+    }
+
+    processStreamChunk(reply, reply->readAll());
+}
+
+void AiProvider::processStreamChunk(QNetworkReply *reply, const QByteArray &chunk)
+{
+    if (!reply || !m_streamBuffers.contains(reply)) {
+        return;
+    }
+
+    if (!chunk.isEmpty()) {
+        m_streamBuffers[reply].append(chunk);
+        m_rawResponses[reply].append(chunk);
+    }
+
+    QByteArray &buffer = m_streamBuffers[reply];
+    while (true) {
+        const int newlineIndex = buffer.indexOf('\n');
+        if (newlineIndex < 0) {
+            break;
+        }
+
+        QByteArray line = buffer.left(newlineIndex);
+        buffer.remove(0, newlineIndex + 1);
+
+        if (!line.isEmpty() && line.endsWith('\r')) {
+            line.chop(1);
+        }
+
+        if (line.isEmpty() || !line.startsWith("data:")) {
+            continue;
+        }
+
+        const QByteArray payload = line.mid(5).trimmed();
+        if (payload.isEmpty() || payload == "[DONE]") {
+            continue;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(payload, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            continue;
+        }
+
+        const QJsonObject root = doc.object();
+        if (root.contains("error")) {
+            emit errorOccurred(buildApiErrorMessage(payload, "Streaming response contained an error"));
+            continue;
+        }
+
+        const QString delta = extractStreamDelta(root);
+        if (delta.isEmpty()) {
+            continue;
+        }
+
+        m_streamReplies[reply].append(delta);
+        emit replyChunkReceived(delta);
+    }
+}
+
+void AiProvider::finalizeStreamReply(QNetworkReply *reply)
+{
+    if (!reply) {
+        return;
+    }
+
+    if (!m_streamBuffers.value(reply).isEmpty()) {
+        processStreamChunk(reply, "\n");
+    }
+
+    QString fullReply = m_streamReplies.value(reply);
+    if (fullReply.isEmpty()) {
+        const QByteArray rawResponse = m_rawResponses.value(reply);
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(rawResponse, &parseError);
+        if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+            fullReply = extractFinalContent(doc.object());
+        }
+    }
+
+    if (fullReply.isEmpty()) {
+        emit errorOccurred("Response did not contain any content");
+    } else {
+        emit replyReceived(fullReply);
+    }
+
+    cleanupStreamReply(reply);
+}
+
+void AiProvider::cleanupStreamReply(QNetworkReply *reply)
+{
+    m_streamBuffers.remove(reply);
+    m_rawResponses.remove(reply);
+    m_streamReplies.remove(reply);
+}
 
 void AiProvider::handleReply()
 {
-    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
-    if (!reply) return;
+    QNetworkReply *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply) {
+        return;
+    }
 
-    QByteArray data = reply->readAll();
+    if (m_streamBuffers.contains(reply)) {
+        const QByteArray tail = reply->readAll();
+        if (!tail.isEmpty()) {
+            processStreamChunk(reply, tail);
+        }
+
+        if (reply->error() != QNetworkReply::NoError) {
+            const QByteArray rawResponse = m_rawResponses.value(reply);
+            const QString errorMsg = buildApiErrorMessage(
+                rawResponse,
+                QString("Network error [%1]: %2")
+                    .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+                    .arg(reply->errorString()));
+
+            emit errorOccurred(errorMsg);
+            cleanupStreamReply(reply);
+            reply->deleteLater();
+            return;
+        }
+
+        finalizeStreamReply(reply);
+        reply->deleteLater();
+        return;
+    }
+
+    const QByteArray data = reply->readAll();
 
     qDebug() << "=== AI Response ===";
     qDebug() << "Status Code:" << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
     if (reply->error() != QNetworkReply::NoError) {
-        QString errorMsg = QString("网络错误 [%1]: %2")
-                               .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
-                               .arg(reply->errorString());
+        const QString errorMsg = buildApiErrorMessage(
+            data,
+            QString("Network error [%1]: %2")
+                .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+                .arg(reply->errorString()));
 
-        QJsonDocument doc = QJsonDocument::fromJson(data);
-        if (doc.isObject() && doc.object().contains("error")) {
-            QJsonObject errorObj = doc.object()["error"].toObject();
-            QString apiError = errorObj["message"].toString();
-            if (!apiError.isEmpty()) {
-                errorMsg += "\nAPI 错误：" + apiError;
-            }
-        }
-
-        emit errorOccurred("❌ " + errorMsg);
+        emit errorOccurred(errorMsg);
         reply->deleteLater();
         return;
     }
 
-    QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (!doc.isObject()) {
-        emit errorOccurred("❌ 无效的响应格式");
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        emit errorOccurred("Invalid response JSON");
         reply->deleteLater();
         return;
     }
 
-    QJsonObject obj = doc.object();
-
-    if (obj.contains("error")) {
-        QString errorMsg = obj["error"].toObject()["message"].toString();
-        emit errorOccurred("❌ API 错误：" + errorMsg);
+    const QJsonObject root = doc.object();
+    if (root.contains("error")) {
+        emit errorOccurred(buildApiErrorMessage(data, "API error"));
         reply->deleteLater();
         return;
     }
 
-    if (obj.contains("choices")) {
-        QJsonArray choices = obj["choices"].toArray();
-        if (!choices.isEmpty()) {
-            QString content = choices[0].toObject()["message"].toObject()["content"].toString();
-            emit replyReceived(content);
-        } else {
-            emit errorOccurred("❌ 响应中没有内容");
-        }
+    const QString content = extractFinalContent(root);
+    if (content.isEmpty()) {
+        emit errorOccurred("Response did not contain any content");
     } else {
-        emit errorOccurred("❌ 响应格式错误：缺少 choices 字段");
+        emit replyReceived(content);
     }
 
     reply->deleteLater();
 }
-
 
 void AiProvider::setSystemPrompt(const QString &prompt)
 {
