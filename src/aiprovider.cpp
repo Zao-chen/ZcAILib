@@ -1,4 +1,4 @@
-#include "AiProvider.h"
+#include "aiprovider.h"
 
 #include <QDateTime>
 #include <QDebug>

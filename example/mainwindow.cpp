@@ -1,6 +1,6 @@
 #include "mainwindow.h"
 
-#include "AiProvider.h"
+#include "aiprovider.h"
 
 #include <QCheckBox>
 #include <QComboBox>
