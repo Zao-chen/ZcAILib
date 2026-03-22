@@ -14,11 +14,24 @@ MainWindow::MainWindow(QWidget *parent)
 {
     AiProvider *ai = new AiProvider(this);
     ai->setServiceType(AiProvider::DeepSeek);
-    ai->setApiKey("sk-e4687dadfe514522b31bea73f698a103");  // 替换成你的 Key
 
     // UI 组件
     QWidget *central = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(central);
+
+    // === API Key 输入 ===
+    QHBoxLayout *apiKeyLayout = new QHBoxLayout;
+    QLabel *apiKeyLabel = new QLabel("API Key：");
+    QLineEdit *apiKeyInput = new QLineEdit;
+    apiKeyInput->setEchoMode(QLineEdit::Password);
+    apiKeyInput->setPlaceholderText("请输入你的 API Key");
+    QPushButton *setApiKeyBtn = new QPushButton("✅ 设置");
+    setApiKeyBtn->setMaximumWidth(60);
+
+    apiKeyLayout->addWidget(apiKeyLabel);
+    apiKeyLayout->addWidget(apiKeyInput, 1);
+    apiKeyLayout->addWidget(setApiKeyBtn);
+    layout->addLayout(apiKeyLayout);
 
     // === 服务选择 ===
     QHBoxLayout *serviceLayout = new QHBoxLayout;
@@ -85,6 +98,21 @@ MainWindow::MainWindow(QWidget *parent)
 
     // ========== 信号连接 ==========
 
+    // 设置 API Key
+    connect(setApiKeyBtn, &QPushButton::clicked, [=]() {
+        QString apiKey = apiKeyInput->text().trimmed();
+        if (apiKey.isEmpty()) {
+            chatDisplay->append("❌ API Key 不能为空");
+            return;
+        }
+        ai->setApiKey(apiKey);
+        chatDisplay->append(QString("✅ API Key 已设置（长度：%1）").arg(apiKey.length()));
+        setApiKeyBtn->setText("✓ 设置");
+    });
+
+    // 回车快速设置 API Key
+    connect(apiKeyInput, &QLineEdit::returnPressed, setApiKeyBtn, &QPushButton::click);
+
     // 切换服务
     connect(serviceSelector, QOverload<int>::of(&QComboBox::currentIndexChanged), [=](int index) {
         AiProvider::ServiceType type = static_cast<AiProvider::ServiceType>(
@@ -97,6 +125,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 获取模型列表
     connect(fetchModelsBtn, &QPushButton::clicked, [=]() {
+        if (apiKeyInput->text().trimmed().isEmpty()) {
+            chatDisplay->append("❌ 请先设置 API Key");
+            return;
+        }
         chatDisplay->append("🔄 正在从 API 获取模型列表...");
         fetchModelsBtn->setEnabled(false);
         modelSelector->clear();
@@ -145,6 +177,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 发送消息
     connect(sendBtn, &QPushButton::clicked, [=]() {
+        if (apiKeyInput->text().trimmed().isEmpty()) {
+            chatDisplay->append("❌ 请先设置 API Key");
+            return;
+        }
         QString msg = input->text().trimmed();
         if (msg.isEmpty()) return;
 
