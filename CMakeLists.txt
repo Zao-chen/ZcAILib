@@ -14,23 +14,33 @@ set(CMAKE_AUTOUIC ON)
 find_package(Qt6 COMPONENTS Core Widgets Network REQUIRED)
 
 # ========== 构建库 ==========
-add_library(ZcAiLib SHARED
+set(ZCAILIB_SOURCES
     src/ZcAiLib_global.h
     src/aiprovider.h
     src/aiprovider.cpp
 )
 
-target_link_libraries(ZcAiLib PUBLIC
-    Qt6::Core
-    Qt6::Network
-)
+function(zcailib_configure_target target_name)
+    target_link_libraries(${target_name} PUBLIC
+        Qt6::Core
+        Qt6::Network
+    )
+
+    target_include_directories(${target_name} PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<INSTALL_INTERFACE:include>
+    )
+
+    set_target_properties(${target_name} PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+endfunction()
+
+add_library(ZcAiLib SHARED ${ZCAILIB_SOURCES})
+zcailib_configure_target(ZcAiLib)
 
 target_compile_definitions(ZcAiLib PRIVATE ZCAILIB_LIBRARY)
-
-target_include_directories(ZcAiLib PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-    $<INSTALL_INTERFACE:include>
-)
 
 set_target_properties(ZcAiLib PROPERTIES
     VERSION ${PROJECT_VERSION}
@@ -43,11 +53,28 @@ if(MINGW)
     )
 endif()
 
+if(UNIX AND NOT APPLE)
+    add_library(ZcAiLibStatic STATIC ${ZCAILIB_SOURCES})
+    zcailib_configure_target(ZcAiLibStatic)
+
+    target_compile_definitions(ZcAiLibStatic PUBLIC ZCAILIB_STATIC)
+
+    set_target_properties(ZcAiLibStatic PROPERTIES
+        OUTPUT_NAME ZcAiLib
+    )
+endif()
+
 install(TARGETS ZcAiLib
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+
+if(TARGET ZcAiLibStatic)
+    install(TARGETS ZcAiLibStatic
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
 
 install(FILES
     src/aiprovider.h

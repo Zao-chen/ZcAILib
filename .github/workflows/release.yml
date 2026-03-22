@@ -12,12 +12,21 @@ on:
         required: false
         default: ""
         type: string
+      platform:
+        description: Release platform
+        required: false
+        default: "linux"
+        type: choice
+        options:
+          - linux
+          - windows
       toolchain:
         description: Build toolchain
         required: false
-        default: "mingw"
+        default: "gcc"
         type: choice
         options:
+          - gcc
           - mingw
           - msvc
       qt_version:
@@ -26,7 +35,7 @@ on:
         default: "6.8.3"
         type: string
       qt_arch:
-        description: Qt architecture, leave empty to auto-select by toolchain and Qt version
+        description: Qt architecture, leave empty to auto-select
         required: false
         default: ""
         type: string
@@ -40,7 +49,77 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-linux:
+    if: ${{ inputs.platform == 'linux' }}
+    runs-on: ubuntu-22.04
+
+    env:
+      BUILD_TYPE: Release
+      PACKAGE_ROOT: ${{ github.workspace }}/package
+      PACKAGE_DIR: ${{ github.workspace }}/package/ZcAILib
+      ARCHIVE_NAME: ZcAILib-${{ inputs.tag }}-linux-gcc.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Resolve Qt architecture
+        id: qt_arch
+        shell: bash
+        run: |
+          qt_arch="${{ inputs.qt_arch }}"
+          if [ -z "$qt_arch" ]; then
+            qt_arch="gcc_64"
+          fi
+          echo "qt_arch=$qt_arch" >> "$GITHUB_OUTPUT"
+          echo "Using Qt architecture: $qt_arch"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ inputs.qt_version }}
+          host: linux
+          target: desktop
+          arch: ${{ steps.qt_arch.outputs.qt_arch }}
+          cache: true
+
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config "$BUILD_TYPE"
+
+      - name: Install package layout
+        shell: bash
+        run: cmake --install build --config "$BUILD_TYPE" --prefix "$PACKAGE_DIR"
+
+      - name: Create archive
+        shell: bash
+        run: |
+          tar -C "$PACKAGE_ROOT" -czf "$ARCHIVE_NAME" ZcAILib
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: ${{ github.workspace }}/${{ env.ARCHIVE_NAME }}
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.release_name != '' && inputs.release_name || inputs.tag }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: ${{ github.workspace }}/${{ env.ARCHIVE_NAME }}
+
+  build-windows:
+    if: ${{ inputs.platform == 'windows' }}
     runs-on: windows-2022
 
     env:
@@ -66,6 +145,12 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
+
+      - name: Validate toolchain
+        if: ${{ inputs.toolchain == 'gcc' }}
+        shell: pwsh
+        run: |
+          Write-Error "Windows builds only support toolchain=mingw or toolchain=msvc."
 
       - name: Resolve Qt architecture
         id: qt_arch
@@ -109,17 +194,17 @@ jobs:
           arch: ${{ steps.qt_arch.outputs.qt_arch }}
           cache: true
 
-      - name: Configure
+      - name: Configure MSVC
         if: ${{ inputs.toolchain == 'msvc' }}
         shell: cmd
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
 
-      - name: Build
+      - name: Build MSVC
         if: ${{ inputs.toolchain == 'msvc' }}
         shell: cmd
         run: cmake --build build --config %BUILD_TYPE%
 
-      - name: Install package layout
+      - name: Install MSVC package layout
         if: ${{ inputs.toolchain == 'msvc' }}
         shell: cmd
         run: cmake --install build --config %BUILD_TYPE% --prefix "%PACKAGE_DIR%"
@@ -145,7 +230,7 @@ jobs:
             --config "${BUILD_TYPE}" \
             --prefix "$(cygpath -u "$PACKAGE_DIR")"
 
-      - name: Create zip archive
+      - name: Create archive
         shell: pwsh
         run: |
           $archivePath = Join-Path $env:GITHUB_WORKSPACE $env:ARCHIVE_NAME
