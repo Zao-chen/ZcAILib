@@ -12,13 +12,21 @@ on:
         required: false
         default: ""
         type: string
+      toolchain:
+        description: Build toolchain
+        required: false
+        default: "mingw"
+        type: choice
+        options:
+          - mingw
+          - msvc
       qt_version:
         description: Qt version
         required: false
         default: "6.8.3"
         type: string
       qt_arch:
-        description: Qt architecture, leave empty to auto-select by Qt version
+        description: Qt architecture, leave empty to auto-select by toolchain and Qt version
         required: false
         default: ""
         type: string
@@ -38,14 +46,26 @@ jobs:
     env:
       BUILD_TYPE: Release
       PACKAGE_DIR: ${{ github.workspace }}\package\ZcAILib
-      ARCHIVE_NAME: ZcAILib-${{ inputs.tag }}-windows-msvc.zip
+      ARCHIVE_NAME: ZcAILib-${{ inputs.tag }}-windows-${{ inputs.toolchain }}.zip
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup MSVC
+        if: ${{ inputs.toolchain == 'msvc' }}
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup MSYS2
+        if: ${{ inputs.toolchain == 'mingw' }}
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
 
       - name: Resolve Qt architecture
         id: qt_arch
@@ -53,27 +73,32 @@ jobs:
         run: |
           $qtVersion = "${{ inputs.qt_version }}"
           $qtArch = "${{ inputs.qt_arch }}"
+          $toolchain = "${{ inputs.toolchain }}"
 
           if ([string]::IsNullOrWhiteSpace($qtArch)) {
-            $parts = $qtVersion.Split('.')
-            $major = if ($parts.Length -gt 0) { [int]$parts[0] } else { 0 }
-            $minor = if ($parts.Length -gt 1) { [int]$parts[1] } else { 0 }
-
-            if ($major -gt 6 -or ($major -eq 6 -and $minor -ge 8)) {
-              $qtArch = "win64_msvc2022_64"
-            } elseif ($major -eq 6 -or ($major -eq 5 -and $minor -ge 15)) {
-              $qtArch = "win64_msvc2019_64"
-            } elseif ($major -eq 5 -and $minor -ge 9) {
-              $qtArch = "win64_msvc2017_64"
-            } elseif ($major -eq 5 -and $minor -ge 6) {
-              $qtArch = "win64_msvc2015_64"
+            if ($toolchain -eq "mingw") {
+              $qtArch = "win64_mingw"
             } else {
-              $qtArch = "win64_msvc2013_64"
+              $parts = $qtVersion.Split('.')
+              $major = if ($parts.Length -gt 0) { [int]$parts[0] } else { 0 }
+              $minor = if ($parts.Length -gt 1) { [int]$parts[1] } else { 0 }
+
+              if ($major -gt 6 -or ($major -eq 6 -and $minor -ge 8)) {
+                $qtArch = "win64_msvc2022_64"
+              } elseif ($major -eq 6 -or ($major -eq 5 -and $minor -ge 15)) {
+                $qtArch = "win64_msvc2019_64"
+              } elseif ($major -eq 5 -and $minor -ge 9) {
+                $qtArch = "win64_msvc2017_64"
+              } elseif ($major -eq 5 -and $minor -ge 6) {
+                $qtArch = "win64_msvc2015_64"
+              } else {
+                $qtArch = "win64_msvc2013_64"
+              }
             }
           }
 
           "qt_arch=$qtArch" >> $env:GITHUB_OUTPUT
-          "Using Qt architecture: $qtArch"
+          "Using Qt architecture: $qtArch for toolchain: $toolchain"
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -85,16 +110,40 @@ jobs:
           cache: true
 
       - name: Configure
+        if: ${{ inputs.toolchain == 'msvc' }}
         shell: cmd
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
 
       - name: Build
+        if: ${{ inputs.toolchain == 'msvc' }}
         shell: cmd
         run: cmake --build build --config %BUILD_TYPE%
 
       - name: Install package layout
+        if: ${{ inputs.toolchain == 'msvc' }}
         shell: cmd
         run: cmake --install build --config %BUILD_TYPE% --prefix "%PACKAGE_DIR%"
+
+      - name: Configure MinGW
+        if: ${{ inputs.toolchain == 'mingw' }}
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_PREFIX_PATH="$(cygpath -u "$QT_ROOT_DIR")"
+
+      - name: Build MinGW
+        if: ${{ inputs.toolchain == 'mingw' }}
+        shell: msys2 {0}
+        run: cmake --build build --config "${BUILD_TYPE}"
+
+      - name: Install MinGW package layout
+        if: ${{ inputs.toolchain == 'mingw' }}
+        shell: msys2 {0}
+        run: |
+          cmake --install build \
+            --config "${BUILD_TYPE}" \
+            --prefix "$(cygpath -u "$PACKAGE_DIR")"
 
       - name: Create zip archive
         shell: pwsh

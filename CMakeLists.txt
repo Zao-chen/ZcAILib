@@ -37,6 +37,12 @@ set_target_properties(ZcAiLib PROPERTIES
     SOVERSION 1
 )
 
+if(MINGW)
+    set_target_properties(ZcAiLib PROPERTIES
+        IMPORT_SUFFIX ".a"
+    )
+endif()
+
 install(TARGETS ZcAiLib
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
