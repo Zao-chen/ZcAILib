@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(ZcAiLib VERSION 0.1.0 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -14,8 +16,8 @@ find_package(Qt6 COMPONENTS Core Widgets Network REQUIRED)
 # ========== 构建库 ==========
 add_library(ZcAiLib SHARED
     src/ZcAiLib_global.h
-    src/AiProvider.h
-    src/AiProvider.cpp
+    src/aiprovider.h
+    src/aiprovider.cpp
 )
 
 target_link_libraries(ZcAiLib PUBLIC
@@ -33,6 +35,23 @@ target_include_directories(ZcAiLib PUBLIC
 set_target_properties(ZcAiLib PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 1
+)
+
+install(TARGETS ZcAiLib
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES
+    src/aiprovider.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    RENAME AiProvider.h
+)
+
+install(FILES
+    src/ZcAiLib_global.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
 # ========== 构建示例程序 ==========
