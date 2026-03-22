@@ -85,22 +85,16 @@ jobs:
           cache: true
 
       - name: Configure
-        shell: pwsh
-        run: >
-          cmake -S . -B build
-          -G "Ninja"
-          -DCMAKE_BUILD_TYPE=${env:BUILD_TYPE}
+        shell: cmd
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
 
       - name: Build
-        shell: pwsh
-        run: cmake --build build --config ${env:BUILD_TYPE}
+        shell: cmd
+        run: cmake --build build --config %BUILD_TYPE%
 
       - name: Install package layout
-        shell: pwsh
-        run: >
-          cmake --install build
-          --config ${env:BUILD_TYPE}
-          --prefix "${env:PACKAGE_DIR}"
+        shell: cmd
+        run: cmake --install build --config %BUILD_TYPE% --prefix "%PACKAGE_DIR%"
 
       - name: Create zip archive
         shell: pwsh
