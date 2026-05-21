@@ -138,6 +138,15 @@ For custom services:
 
 ```cpp
 ai->setServiceType(AiProvider::Custom);
+ai->setBaseUrl("https://your-domain/v1");
+ai->setApiKey("YOUR_API_KEY");
+ai->setModel("your-model-id");
+```
+
+If you need to point at a fully custom chat endpoint:
+
+```cpp
+ai->setServiceType(AiProvider::Custom);
 ai->setApiUrl("https://your-domain/v1/chat/completions");
 ai->setApiKey("YOUR_API_KEY");
 ai->setModel("your-model-id");
@@ -150,6 +159,7 @@ Main methods:
 - `setServiceType(AiProvider::ServiceType type)`
 - `setApiKey(const QString &apiKey)`
 - `setApiUrl(const QString &url)`
+- `setBaseUrl(const QString &baseUrl)`
 - `setModel(const QString &model)`
 - `setStreamEnabled(bool enabled)`
 - `setSystemPrompt(const QString &prompt)`
