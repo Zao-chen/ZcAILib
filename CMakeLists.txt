@@ -13,6 +13,17 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 COMPONENTS Core Widgets Network REQUIRED)
 
+if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    # Avoid linking deprecated AGL on modern macOS.
+    get_target_property(_wrapopengl_libs WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
+    if(_wrapopengl_libs)
+        list(REMOVE_ITEM _wrapopengl_libs w"-framework AGL" "AGL" "/System/Library/Frameworks/AGL.framework")
+        set_target_properties(WrapOpenGL::WrapOpenGL PROPERTIES
+            INTERFACE_LINK_LIBRARIES "${_wrapopengl_libs}"
+        )
+    endif()
+endif()
+
 # ========== 构建库 ==========
 set(ZCAILIB_SOURCES
     src/ZcAiLib_global.h
