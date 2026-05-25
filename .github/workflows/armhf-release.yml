@@ -38,8 +38,7 @@ jobs:
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: armv7
-          distro: bullseye
-          base_image: debian:bookworm
+          distro: bookworm
           githubToken: ${{ github.token }}
           install: |
             apt-get update
@@ -56,6 +55,7 @@ jobs:
             BUILD_TYPE="${{ env.BUILD_TYPE }}"
             PACKAGE_DIR="${{ env.PACKAGE_DIR }}"
 
+            uname -m
             rm -rf build-armhf package package-install
             cmake -S . -B build-armhf -G Ninja \
               -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
@@ -68,6 +68,7 @@ jobs:
             cp -a package-install/ZcAILib/lib/libZcAiLib.* "${PACKAGE_DIR}/lib/armhf/"
 
             file "${PACKAGE_DIR}"/lib/armhf/*
+            file -L "${PACKAGE_DIR}"/lib/armhf/libZcAiLib.so | grep -Eq 'ELF 32-bit.*ARM'
             tar -C package -czf "${ARCHIVE_NAME}" ZcAILib
 
       - name: Upload workflow artifact
