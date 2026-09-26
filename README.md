@@ -11,7 +11,7 @@ It currently provides:
 
 ## Requirements
 
-- Qt 6
+- Qt 6.8.3 (Core and Network; Widgets for the optional example, Test for tests)
 - CMake 3.16+
 - C++17
 
@@ -26,6 +26,7 @@ This project links against:
 ```bash
 cmake -S . -B build
 cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
 The example executable will be generated as:
@@ -33,6 +34,45 @@ The example executable will be generated as:
 - `build/Debug/ZcAiLib-Example.exe` on Windows with Visual Studio generators
 
 ## Add To Your Project
+
+Version 0.2.0 supports Windows (MSVC / MinGW), macOS arm64 (12.0+), and Linux
+x86_64 (Ubuntu 22.04 / 24.04). SDK releases use Qt 6.8.3 and shared-library ABI 1.
+The public `AiProvider` methods and signals are unchanged.
+
+The following CMake options default to ON for standalone builds and OFF when
+embedded with `add_subdirectory`: `ZCAILIB_BUILD_EXAMPLES`,
+`ZCAILIB_BUILD_STATIC`, `ZCAILIB_BUILD_TESTING`, and `ZCAILIB_INSTALL`.
+The library itself only depends on Qt Core and Network. All source builds are
+offline once Qt and the compiler are installed.
+
+Both `ZcAiLib` and the namespaced alias `ZcAiLib::ZcAiLib` remain available.
+Optional static consumers link `ZcAiLib::ZcAiLibStatic`, which also supplies the
+required `ZCAILIB_STATIC` compile definition. On Windows its archive is named
+`ZcAiLibStatic.lib` / `libZcAiLibStatic.a` to avoid colliding with the DLL import library.
+
+For an installed SDK:
+
+```bash
+cmake --install build --config Release --prefix /your/sdk/prefix
+```
+
+```cmake
+find_package(ZcAiLib 0.2 CONFIG REQUIRED)
+target_link_libraries(YourApp PRIVATE ZcAiLib::ZcAiLib)
+```
+
+Add the install prefix to `CMAKE_PREFIX_PATH`. The package is relocatable and
+exports the same `AiProvider.h` spelling as a source build. The example can run
+from a Qt-enabled developer environment; deploy Qt separately when distributing it.
+On Linux with Qt outside the system library directories, add its `lib` directory
+to `LD_LIBRARY_PATH` when running an installed SDK consumer. Application bundles
+can place Qt beside the SDK; its installed runpath is `$ORIGIN`.
+
+CTest exercises shared and static transports against a loopback HTTP fixture
+(models, chat, fragmented UTF-8 SSE, HTTP/JSON errors), checks a TLS backend, and
+builds/runs consumers after relocating an installed SDK. Tests require no keys
+or external AI service. Build and install in the same configuration (Release is
+used for published SDKs).
 
 If you use this repository directly, the simplest way is:
 

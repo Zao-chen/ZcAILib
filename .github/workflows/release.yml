@@ -1,259 +1,150 @@
-name: Release
-
+name: SDK release
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, for example v0.1.0
+        description: Release tag (for example v0.2.0)
         required: true
         type: string
       release_name:
         description: Release title
-        required: false
-        default: ""
+        default: ''
         type: string
       platform:
-        description: Release platform
-        required: false
-        default: "linux"
+        description: Platform
+        default: all
         type: choice
-        options:
-          - linux
-          - windows
+        options: [all, linux, windows, macos]
       toolchain:
-        description: Build toolchain
-        required: false
-        default: "gcc"
+        description: Windows toolchain (auto builds MSVC and MinGW)
+        default: auto
         type: choice
-        options:
-          - gcc
-          - mingw
-          - msvc
-      qt_version:
-        description: Qt version
-        required: false
-        default: "6.8.3"
-        type: string
-      qt_arch:
-        description: Qt architecture, leave empty to auto-select
-        required: false
-        default: ""
-        type: string
+        options: [auto, gcc, msvc, mingw]
       prerelease:
-        description: Mark release as prerelease
-        required: false
+        description: Mark prerelease
         default: false
         type: boolean
-
 permissions:
-  contents: write
-
+  contents: read
 jobs:
-  build-linux:
-    if: ${{ inputs.platform == 'linux' }}
+  select:
     runs-on: ubuntu-22.04
-
-    env:
-      BUILD_TYPE: Release
-      PACKAGE_ROOT: ${{ github.workspace }}/package
-      PACKAGE_DIR: ${{ github.workspace }}/package/ZcAILib
-      ARCHIVE_NAME: ZcAILib-${{ inputs.tag }}-linux-gcc.tar.gz
-
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
-
-      - name: Resolve Qt architecture
-        id: qt_arch
-        shell: bash
+      - id: select
+        shell: python
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          TOOLCHAIN: ${{ inputs.toolchain }}
+          TAG: ${{ inputs.tag }}
         run: |
-          qt_arch="${{ inputs.qt_arch }}"
-          if [ -z "$qt_arch" ]; then
-            qt_arch="gcc_64"
-          fi
-          echo "qt_arch=$qt_arch" >> "$GITHUB_OUTPUT"
-          echo "Using Qt architecture: $qt_arch"
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ inputs.qt_version }}
-          host: linux
-          target: desktop
-          arch: ${{ steps.qt_arch.outputs.qt_arch }}
-          cache: true
-
-      - name: Configure
-        shell: bash
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-
-      - name: Build
-        shell: bash
-        run: cmake --build build --config "$BUILD_TYPE"
-
-      - name: Install package layout
-        shell: bash
-        run: cmake --install build --config "$BUILD_TYPE" --prefix "$PACKAGE_DIR"
-
-      - name: Create archive
-        shell: bash
-        run: |
-          tar -C "$PACKAGE_ROOT" -czf "$ARCHIVE_NAME" ZcAILib
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ARCHIVE_NAME }}
-          path: ${{ github.workspace }}/${{ env.ARCHIVE_NAME }}
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          name: ${{ inputs.release_name != '' && inputs.release_name || inputs.tag }}
-          prerelease: ${{ inputs.prerelease }}
-          generate_release_notes: true
-          files: ${{ github.workspace }}/${{ env.ARCHIVE_NAME }}
-
-  build-windows:
-    if: ${{ inputs.platform == 'windows' }}
-    runs-on: windows-2022
-
-    env:
-      BUILD_TYPE: Release
-      PACKAGE_DIR: ${{ github.workspace }}\package\ZcAILib
-      ARCHIVE_NAME: ZcAILib-${{ inputs.tag }}-windows-${{ inputs.toolchain }}.zip
-
+          import json, os, re
+          if not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z._+-]*', os.environ['TAG']):
+              raise SystemExit('Invalid tag')
+          jobs = [
+            dict(platform='linux', toolchain='gcc', os='ubuntu-22.04', arch='linux_gcc_64'),
+            dict(platform='macos', toolchain='clang', os='macos-15', arch='clang_64'),
+            dict(platform='windows', toolchain='msvc', os='windows-2022', arch='win64_msvc2022_64'),
+            dict(platform='windows', toolchain='mingw', os='windows-2022', arch='win64_mingw')]
+          jobs = [j for j in jobs if os.environ['PLATFORM'] in ('all', j['platform'])]
+          jobs = [j for j in jobs if j['platform'] != 'windows' or os.environ['TOOLCHAIN'] in ('auto', j['toolchain'])]
+          if not jobs:
+              raise SystemExit('Unsupported platform/toolchain combination')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': jobs}) + '\n')
+  build:
+    needs: select
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        if: ${{ inputs.toolchain == 'msvc' }}
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Setup MSYS2
-        if: ${{ inputs.toolchain == 'mingw' }}
-        uses: msys2/setup-msys2@v2
+      - uses: actions/checkout@v4
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.toolchain == 'msvc'
+      - uses: msys2/setup-msys2@v2
+        if: matrix.toolchain == 'mingw'
         with:
           msystem: MINGW64
           update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-
-      - name: Validate toolchain
-        if: ${{ inputs.toolchain == 'gcc' }}
-        shell: pwsh
-        run: |
-          Write-Error "Windows builds only support toolchain=mingw or toolchain=msvc."
-
-      - name: Resolve Qt architecture
-        id: qt_arch
-        shell: pwsh
-        run: |
-          $qtVersion = "${{ inputs.qt_version }}"
-          $qtArch = "${{ inputs.qt_arch }}"
-          $toolchain = "${{ inputs.toolchain }}"
-
-          if ([string]::IsNullOrWhiteSpace($qtArch)) {
-            if ($toolchain -eq "mingw") {
-              $qtArch = "win64_mingw"
-            } else {
-              $parts = $qtVersion.Split('.')
-              $major = if ($parts.Length -gt 0) { [int]$parts[0] } else { 0 }
-              $minor = if ($parts.Length -gt 1) { [int]$parts[1] } else { 0 }
-
-              if ($major -gt 6 -or ($major -eq 6 -and $minor -ge 8)) {
-                $qtArch = "win64_msvc2022_64"
-              } elseif ($major -eq 6 -or ($major -eq 5 -and $minor -ge 15)) {
-                $qtArch = "win64_msvc2019_64"
-              } elseif ($major -eq 5 -and $minor -ge 9) {
-                $qtArch = "win64_msvc2017_64"
-              } elseif ($major -eq 5 -and $minor -ge 6) {
-                $qtArch = "win64_msvc2015_64"
-              } else {
-                $qtArch = "win64_msvc2013_64"
-              }
-            }
-          }
-
-          "qt_arch=$qtArch" >> $env:GITHUB_OUTPUT
-          "Using Qt architecture: $qtArch for toolchain: $toolchain"
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+      - name: Linux runtime dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0 libssl-dev
+      - uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ inputs.qt_version }}
-          host: windows
-          target: desktop
-          arch: ${{ steps.qt_arch.outputs.qt_arch }}
+          version: '6.8.3'
+          arch: ${{ matrix.arch }}
           cache: true
-
-      - name: Configure MSVC
-        if: ${{ inputs.toolchain == 'msvc' }}
-        shell: cmd
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
-
-      - name: Build MSVC
-        if: ${{ inputs.toolchain == 'msvc' }}
-        shell: cmd
-        run: cmake --build build --config %BUILD_TYPE%
-
-      - name: Install MSVC package layout
-        if: ${{ inputs.toolchain == 'msvc' }}
-        shell: cmd
-        run: cmake --install build --config %BUILD_TYPE% --prefix "%PACKAGE_DIR%"
-
-      - name: Configure MinGW
-        if: ${{ inputs.toolchain == 'mingw' }}
+      - name: Configure, build and test
+        if: matrix.toolchain != 'mingw'
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          extra=()
+          if [[ "$PLATFORM" == macos ]]; then
+            extra=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0)
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "${extra[@]}"
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+          cmake --install build --prefix "$PWD/package/ZcAILib"
+      - name: Configure, build and test MinGW
+        if: matrix.toolchain == 'mingw'
         shell: msys2 {0}
         run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DCMAKE_PREFIX_PATH="$(cygpath -u "$QT_ROOT_DIR")"
-
-      - name: Build MinGW
-        if: ${{ inputs.toolchain == 'mingw' }}
-        shell: msys2 {0}
-        run: cmake --build build --config "${BUILD_TYPE}"
-
-      - name: Install MinGW package layout
-        if: ${{ inputs.toolchain == 'mingw' }}
-        shell: msys2 {0}
-        run: |
-          cmake --install build \
-            --config "${BUILD_TYPE}" \
-            --prefix "$(cygpath -u "$PACKAGE_DIR")"
-
-      - name: Create archive
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(cygpath -u "$QT_ROOT_DIR")"
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+          cmake --install build --prefix "$PWD/package/ZcAILib"
+      - name: Archive Windows SDK
+        if: matrix.platform == 'windows'
         shell: pwsh
-        run: |
-          $archivePath = Join-Path $env:GITHUB_WORKSPACE $env:ARCHIVE_NAME
-          if (Test-Path $archivePath) {
-            Remove-Item $archivePath -Force
-          }
-
-          Compress-Archive `
-            -Path $env:PACKAGE_DIR `
-            -DestinationPath $archivePath `
-            -CompressionLevel Optimal
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        env:
+          TAG: ${{ inputs.tag }}
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: Compress-Archive -Path package/ZcAILib -DestinationPath "ZcAILib-$env:TAG-windows-$env:TOOLCHAIN.zip"
+      - name: Archive Unix SDK
+        if: matrix.platform != 'windows'
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: tar -C package -czf "ZcAILib-$TAG-$PLATFORM-$TOOLCHAIN.tar.gz" ZcAILib
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARCHIVE_NAME }}
-          path: ${{ github.workspace }}\${{ env.ARCHIVE_NAME }}
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+          name: pkg-${{ matrix.platform }}-${{ matrix.toolchain }}
+          path: |
+            ZcAILib-*.zip
+            ZcAILib-*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-${{ matrix.platform }}-${{ matrix.toolchain }}
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/tests/*.txt
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: release_assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}
-          name: ${{ inputs.release_name != '' && inputs.release_name || inputs.tag }}
+          name: ${{ inputs.release_name || inputs.tag }}
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
-          files: ${{ github.workspace }}\${{ env.ARCHIVE_NAME }}
+          fail_on_unmatched_files: true
+          files: release_assets/*
