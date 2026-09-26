@@ -180,6 +180,8 @@ CMakeFiles/
 cmake_install.cmake
 
 *.cmake
+!cmake/**/*.cmake
+!tests/**/*.cmake
 
 # Directories with generated files
 
@@ -195,4 +197,6 @@ cmake_install.cmake
 
 /build*/
 .cache/
+/package/
+/dist/
 
