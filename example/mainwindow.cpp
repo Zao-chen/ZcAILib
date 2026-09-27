@@ -3,6 +3,7 @@
 #include "aiprovider.h"
 #include "ui_mainwindow.h"
 
+#include <QHash>
 #include <QTextCursor>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -17,6 +18,15 @@ MainWindow::MainWindow(QWidget *parent)
 
   ui->serviceSelector->addItem("OpenAI", AiProvider::OpenAI);
   ui->serviceSelector->addItem("DeepSeek", AiProvider::DeepSeek);
+  ui->serviceSelector->addItem("Qwen", AiProvider::Qwen);
+  ui->serviceSelector->addItem("Moonshot", AiProvider::Moonshot);
+  ui->serviceSelector->addItem("Zhipu", AiProvider::Zhipu);
+  ui->serviceSelector->addItem("Doubao", AiProvider::Doubao);
+  ui->serviceSelector->addItem("SiliconFlow", AiProvider::SiliconFlow);
+  ui->serviceSelector->addItem("Anthropic", AiProvider::Anthropic);
+  ui->serviceSelector->addItem("Gemini", AiProvider::Gemini);
+  ui->serviceSelector->addItem("Grok", AiProvider::Grok);
+  ui->serviceSelector->addItem("Custom", AiProvider::Custom);
   ui->serviceSelector->setCurrentIndex(1);
   ui->baseUrlInput->setText("https://api.deepseek.com/v1");
 
@@ -84,10 +94,19 @@ MainWindow::MainWindow(QWidget *parent)
                 ui->serviceSelector->itemData(index).toInt());
             ai->setServiceType(type);
             ui->modelSelector->clear();
-            if (type == AiProvider::OpenAI) {
-              ui->baseUrlInput->setText("https://api.openai.com/v1");
-            } else if (type == AiProvider::DeepSeek) {
-              ui->baseUrlInput->setText("https://api.deepseek.com/v1");
+            const QHash<AiProvider::ServiceType, QString> baseUrls{
+                {AiProvider::OpenAI, "https://api.openai.com/v1"},
+                {AiProvider::DeepSeek, "https://api.deepseek.com/v1"},
+                {AiProvider::Qwen, "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+                {AiProvider::Moonshot, "https://api.moonshot.cn/v1"},
+                {AiProvider::Zhipu, "https://open.bigmodel.cn/api/paas/v4"},
+                {AiProvider::Doubao, "https://ark.cn-beijing.volces.com/api/v3"},
+                {AiProvider::SiliconFlow, "https://api.siliconflow.cn/v1"},
+                {AiProvider::Anthropic, "https://api.anthropic.com/v1"},
+                {AiProvider::Gemini, "https://generativelanguage.googleapis.com/v1beta/openai"},
+                {AiProvider::Grok, "https://api.x.ai/v1"}};
+            if (baseUrls.contains(type)) {
+              ui->baseUrlInput->setText(baseUrls.value(type));
             }
             ui->chatDisplay->append(
                 QString("[config] service switched to %1")
